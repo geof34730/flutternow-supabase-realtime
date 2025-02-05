@@ -20,10 +20,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // Charger les messages existants
   void _fetchMessages() async {
+
+
     final response = await supabase
+
         .from('messages')
         .select()
         .order('created_at', ascending: true);
+
+    print("**************Messages: ${response}");
     setState(() {
       messages = List<Map<String, dynamic>>.from(response);
     });
