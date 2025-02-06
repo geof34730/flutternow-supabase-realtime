@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../Services/Supabase-Auth.dart';
+
 class ChatScreen extends StatefulWidget {
   @override
   _ChatScreenState createState() => _ChatScreenState();
@@ -8,59 +10,67 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final SupabaseClient supabase = Supabase.instance.client;
+  late final Stream<List<Map<String, dynamic>>> _messagesStream;
+  final streamMessage = Supabase.instance.client.from('messages').stream(primaryKey: ['id','content']);
+
   final TextEditingController _messageController = TextEditingController();
-  List<Map<String, dynamic>> messages = [];
 
   @override
   void initState() {
     super.initState();
-    _fetchMessages();
-    _subscribeToRealtime();
-  }
-
-  // Charger les messages existants
-  void _fetchMessages() async {
-
-
-    final response = await supabase
-
+    subscribeChannelMessages();
+    _messagesStream = supabase
         .from('messages')
-        .select()
-        .order('created_at', ascending: true);
-
-    print("**************Messages: ${response}");
-    setState(() {
-      messages = List<Map<String, dynamic>>.from(response);
-    });
+        .stream(primaryKey: ['id'])
+        .order('created_at')
+        .map((maps) => maps.cast<Map<String, dynamic>>());
   }
 
-  // Activer la mise à jour en temps réel
-  void _subscribeToRealtime() {
-    supabase.channel('messages_channel')
-        .onPostgresChanges(
-      event: PostgresChangeEvent.insert,  // Écoute uniquement les nouveaux messages
+  void subscribeChannelMessages() {
+    supabase.channel('messages').onPostgresChanges(
+      event: PostgresChangeEvent.all,
       schema: 'public',
       table: 'messages',
       callback: (payload) {
-
-        print("**************Nouveau message: ${payload.newRecord}");
-        setState(() {
-          //messages.add(payload.newRecord!);
-        });
+        print('Change received: ${payload.toString()}');
       },
-    )
-        .subscribe();
+    ).subscribe((status, [error]) {
+          if (status == RealtimeSubscribeStatus.closed) {
+            print('!!!!!! CLOSED !!!!!!!');
+          }
+          else{
+            print('!!!!!! OPEN !!!!!!!');
+          }
+        }
+    );
+  }
+
+  void handleInserts(payload) {
+    print('Change received! $payload');
   }
 
 
+
+
+
+
+  bool messageOwner(Map<String, dynamic> message) {
+    return message['user_id'] == supabase.auth.currentUser!.id;
+  }
+
   // Envoyer un message
   void _sendMessage() async {
-    if (_messageController.text.trim().isEmpty) return;
+    //if (_messageController.text.trim().isEmpty) return;
+    print(supabase.auth.currentUser!.id);
+    await supabase
+        .from('messages')
+        .insert({'content': _messageController.text, 'user_id': supabase.auth.currentUser!.id});
 
-    await supabase.from('messages').insert({
+    print(_messageController.text);
+  /*  await supabase.from('messages').insert({
       'content': _messageController.text,
     });
-
+*/
     _messageController.clear();
   }
 
@@ -71,16 +81,41 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: ListView.builder(
-              itemCount: messages.length,
-              itemBuilder: (context, index) {
-                final message = messages[index];
-                return ListTile(
-                  title: Text(message['content']),
-                  subtitle: Text(message['created_at']),
+            child: StreamBuilder<List<Map<String, dynamic>>>(
+              stream: _messagesStream,
+              builder: (context, snapshot) {
+                print("snapshot.data: ${snapshot.data}");
+
+
+                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                  return Center(child: Text('Aucun élément'));
+                }
+                return ListView.builder(
+                    itemCount: snapshot.data!.length,
+                    itemBuilder: (context, index) {
+                        return ListTile(
+                          title: Container(
+                            constraints: BoxConstraints(
+                                 minWidth: 10, maxWidth: 20),
+                            alignment: messageOwner(snapshot.data![index]) ? Alignment.centerLeft : Alignment.centerRight,
+                            decoration: BoxDecoration(
+
+                              color: messageOwner(snapshot.data![index]) ? Colors.green : Colors.grey,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            padding: EdgeInsets.all(10),
+                            child: Text(
+                                snapshot.data![index]['content'],
+                                style: TextStyle(
+                                  color: Colors.white,
+                                ),
+                            ),
+                          )
+                        );
+                    }
                 );
               },
-            ),
+            )
           ),
           Padding(
             padding: const EdgeInsets.all(8.0),
@@ -102,6 +137,13 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ),
+          ElevatedButton(onPressed: _sendMessage, child: Text("Envoyer")),
+          ElevatedButton(
+            onPressed: () {
+              SupabaseAuthService().signOutUser();
+            },
+            child: const Text('Log Out'),
+          )
         ],
       ),
     );
